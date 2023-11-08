@@ -76,6 +76,26 @@ usertrap(void)
   if(p->killed)
     exit(-1);
 
+  if(which_dev == 2)
+  {
+    if(p->interval!=0)
+    {
+      if(++p->tickspassed>=p->interval)
+      {
+        if(p->inhandler==0)
+        {
+          p->inhandler=1;
+          p->tickspassed=0;
+          for(int i=0;i<sizeof(p->tf);i++)
+          {
+            *(((char*)&p->tf)+i)=*(((char*)p->trapframe)+i);
+          }
+          p->trapframe->epc=p->fn;
+        }
+      }
+    }
+  }
+
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
     yield();
