@@ -67,6 +67,37 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause()==15&&r_stval()<MAXVA){
+    pte_t* pte;
+    if((pte = walk(p->pagetable, r_stval(), 0)) == 0)
+      panic("usertrap: pte should exist");
+
+    if(*pte&PTE_COW&&*pte&PTE_V){
+      if(refcnt[(PTE2PA(*pte)-KERNBASE)>>12]>1){
+        char* mem;
+        if((mem = kalloc()) == 0){
+          printf("no mem\n");
+          p->killed=1;
+        }else{
+          refcnt[(PTE2PA(*pte)-KERNBASE)>>12]--;
+          memmove(mem, (const void*)PTE2PA(*pte), PGSIZE);
+          uint flags=PTE_FLAGS(*pte);
+          flags|=PTE_W;
+          flags&=~PTE_COW;
+          *pte=PA2PTE(mem)|flags;
+        }
+      }else if(refcnt[(PTE2PA(*pte)-KERNBASE)>>12]==1){
+        *pte&=~PTE_COW;
+        *pte|=PTE_W;
+      }else{
+        panic("usertrap(): this should not happen");
+      }
+    }else{
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      printf("not cow\n");
+      p->killed = 1;
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

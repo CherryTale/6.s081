@@ -6,6 +6,8 @@
 #include "defs.h"
 #include "fs.h"
 
+unsigned char refcnt[(PHYSTOP-KERNBASE)/PGSIZE]={0};
+
 /*
  * the kernel's page table.
  */
@@ -180,7 +182,14 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      if(*pte&PTE_COW){
+        refcnt[(pa-KERNBASE)>>12]--;
+        if(refcnt[(pa-KERNBASE)>>12]==0){
+          kfree((void*)pa);
+        }
+      }else{
+        kfree((void*)pa);
+      }
     }
     *pte = 0;
   }
@@ -303,22 +312,20 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+    *pte&=~PTE_W;
+    *pte|=PTE_COW;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
       goto err;
     }
+    refcnt[(pa-KERNBASE)>>12]++;
   }
   return 0;
 
@@ -350,6 +357,35 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    if(va0>=MAXVA)
+      return -1;
+    pte_t* pte;
+    if((pte=walk(pagetable,va0,0))==0)
+      return -1;
+    if(*pte&PTE_COW){
+      if(*pte&PTE_V){
+        if(refcnt[(PTE2PA(*pte)-KERNBASE)>>12]>1){
+          char* mem;
+          if((mem = kalloc()) == 0){
+            return -1;
+          }else{
+            refcnt[(PTE2PA(*pte)-KERNBASE)>>12]--;
+            memmove(mem, (const void*)PTE2PA(*pte), PGSIZE);
+            uint flags=PTE_FLAGS(*pte);
+            flags|=PTE_W;
+            flags&=~PTE_COW;
+            *pte=PA2PTE(mem)|flags;
+          }
+        }else if(refcnt[(PTE2PA(*pte)-KERNBASE)>>12]==1){
+          *pte&=~PTE_COW;
+          *pte|=PTE_W;
+        }else{
+          return -1;
+        }
+      }else{
+        return -1;
+      }
+    }
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
