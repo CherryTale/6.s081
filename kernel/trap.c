@@ -73,6 +73,7 @@ usertrap(void)
       panic("usertrap: pte should exist");
 
     if(*pte&PTE_COW&&*pte&PTE_V){
+      acquire(&refcntlock);
       if(refcnt[(PTE2PA(*pte)-KERNBASE)>>12]>1){
         char* mem;
         if((mem = kalloc()) == 0){
@@ -92,6 +93,7 @@ usertrap(void)
       }else{
         panic("usertrap(): this should not happen");
       }
+      release(&refcntlock);
     }else{
       printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
       printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

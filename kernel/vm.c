@@ -5,8 +5,10 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
 
-unsigned char refcnt[(PHYSTOP-KERNBASE)/PGSIZE]={0};
+struct spinlock refcntlock={0,"refcntlock",0};
+unsigned char refcnt[(PHYSTOP-KERNBASE)/PGSIZE];
 
 /*
  * the kernel's page table.
@@ -183,10 +185,12 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     if(do_free){
       uint64 pa = PTE2PA(*pte);
       if(*pte&PTE_COW){
+        acquire(&refcntlock);
         refcnt[(pa-KERNBASE)>>12]--;
         if(refcnt[(pa-KERNBASE)>>12]==0){
           kfree((void*)pa);
         }
+        release(&refcntlock);
       }else{
         kfree((void*)pa);
       }
@@ -325,7 +329,9 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if(mappages(new, i, PGSIZE, pa, flags) != 0){
       goto err;
     }
+    acquire(&refcntlock);
     refcnt[(pa-KERNBASE)>>12]++;
+    release(&refcntlock);
   }
   return 0;
 
@@ -364,6 +370,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
       return -1;
     if(*pte&PTE_COW){
       if(*pte&PTE_V){
+        acquire(&refcntlock);
         if(refcnt[(PTE2PA(*pte)-KERNBASE)>>12]>1){
           char* mem;
           if((mem = kalloc()) == 0){
@@ -382,6 +389,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
         }else{
           return -1;
         }
+        release(&refcntlock);
       }else{
         return -1;
       }
